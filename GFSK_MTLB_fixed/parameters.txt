@@ -1,0 +1,7 @@
+Data Length: 179.000000
+Frequency Variance: 11209.097406
+Front Delay: 4000.000000
+Rear Delay: 4000.000000
+V_est Begin: 4001.000000
+Sync Begin: 4641.000000
+Demo Begin: 5271.000000
