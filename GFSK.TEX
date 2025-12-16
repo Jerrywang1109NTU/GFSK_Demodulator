@@ -1,0 +1,143 @@
+\documentclass[journal]{IEEEtran}
+
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\begin{document}
+
+\title{The Design and Implementation of Demodulator for GFSK Burst Signal on FPGA}
+\author{Runyan Wang
+\thanks{Manuscript received Month Day, Year; revised Month Day, Year.}}
+\markboth{Journal Name,~Vol.~X, No.~X, Month~Year}%
+{Author \MakeLowercase{\textit{et al.}}: GFSK Demodulator on FPGA}
+
+\maketitle
+
+\begin{abstract}
+Gaussian Frequency Shift Keying (GFSK) offers constant-envelope, bandwidth-efficient transmission and is widely adopted in low-power links. Burst reception in low SNR conditions is challenging due to unknown start time, carrier-frequency offset (CFO) and timing error. This paper presents a noncoherent burst GFSK demodulator implemented on FPGA. We design a differential-correlation frame synchronizer with adaptive threshold, a data-aided CFO estimator (Luise--Reggiannini), a phase-peak timing recovery, and a multi-sample differential detector that improves bit-error performance by 1--2 dB. MATLAB floating- and fixed-point simulations validate the algorithms; a Verilog implementation on Xilinx FPGA (10 MHz clock) achieves 500 kHz symbol rate. Hardware co-simulation demonstrates BER of $2.99\times10^{-4}$ at $E_b/N_0=14$ dB and $9.3\times10^{-6}$ at $17$ dB.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Gaussian frequency shift keying, burst reception, noncoherent demodulation, synchronization, FPGA.
+\end{IEEEkeywords}
+
+\section{Introduction}
+GFSK is attractive for IoT, telemetry, and space links because of its constant envelope and narrow spectrum. Burst reception under low SNR requires robust blind frame detection, CFO mitigation, timing recovery, and low-complexity demodulation suitable for FPGA.
+
+This work proposes and implements a burst GFSK receiver that: 1) uses differential correlation and adaptive power threshold for frame detection; 2) performs data-aided CFO estimation with Luise--Reggiannini (L\&R) and derotation; 3) aligns timing via preamble phase peaks; 4) applies multi-sample differential detection to reduce BER; 5) realizes a complete RTL pipeline at 10 MHz achieving 500 kHz symbol rate with measured BER targets. The remainder is organized as follows: Section II gives the signal model; Section III revisits noncoherent differential demodulation; Section IV details burst receiver algorithms and pseudocode; Section V presents theoretical analysis; Sections VI--VIII report simulations, FPGA synthesis, and RTL co-simulation; Section IX concludes.
+
+\section{GFSK Signal Model and Frame Format}
+The continuous-time CPFSK baseband signal is
+\begin{equation}
+s(t)=\sqrt{\frac{2E_b}{T_b}}\exp\left\{j2\pi \frac{hR_b}{2}\int_{0}^{t} m(\tau)\,d\tau\right\},
+\end{equation}
+where $h$ is the modulation index, $R_b$ the symbol rate, $m(t)$ the Gaussian-filtered bipolar data. Sampling with $T_s=1/f_s$ yields
+\begin{equation}
+s[n]=\sqrt{\frac{2E_b}{T_b}}\exp\left\{j2\pi\frac{hR_b}{2f_s}\sum_{k=0}^{n} m[k]\right\}.
+\end{equation}
+A Gaussian filter with $BT=0.5$ and effective length $L=3$ shapes $m[n]$. We choose $f_s=20R_b$ for timing robustness.
+
+Burst frame format: 4-byte preamble (repeating ``10''), 4-byte sync word (0x930B51DE), 1-byte length, payload (0--255 B), CRC16 (poly $x^{16}+x^{12}+x^{5}+1$).
+
+\section{Noncoherent Differential Demodulation}
+Single-sample differential detection decides on the sign of
+\begin{equation}
+\Delta\theta[n]=I[n]Q[n-N_T]-Q[n]I[n-N_T],
+\end{equation}
+where $N_T=f_s/R_b$ samples per symbol. Timing error reduces the effective phase swing and raises BER; noise smoothing also shrinks $\Delta\theta$. We therefore adopt multi-sample combining (Section IV-E) to improve reliability.
+
+\section{Burst Receiver Algorithms}
+\subsection{Low-Pass Front-End}
+A linear-phase FIR low-pass filter (order $\approx 40$) suppresses out-of-band noise while keeping in-band distortion negligible.
+
+\subsection{Frame Synchronization}
+Using 4$\times$ oversampled data, we form a differential sequence $d[n]=z[n]z^{*}[n-N_x]$ ($N_x$ samples/symbol at 4$\times$ rate) to cancel CFO phase ramp, then correlate with the pre-differenced sync template. An adaptive threshold from instantaneous power avoids fixed-threshold failures. The peak of correlation marks the sync start and indirectly the preamble start.
+
+\subsection{CFO Estimation and Compensation}
+With the preamble, we build $c[n]=r[n]s_{\text{pre}}^{*}[n]$ and estimate CFO via L\&R:
+\begin{equation}
+\hat{v}=\frac{1}{\pi (N+1)T_s}\arg\left\{\sum_{m=1}^{N}R(m)\right\},
+\end{equation}
+where $R(m)=\frac{1}{L_0-m}\sum_{k=m}^{L_0}c[k]c^{*}[k-m]$. We derotate $r[n]$ by $e^{-j2\pi \hat{v} nT_s}$.
+
+\subsection{Timing Recovery}
+From derotated preamble, we locate phase peaks of consecutive ``10'' patterns, average their offsets to obtain timing shift $\bar{\epsilon}$, and adjust decision instants $n_0+\bar{\epsilon}+iN_T$.
+
+\subsection{Multi-Sample Differential Detection}
+We average $N_d$ phase-difference pairs around the nominal decision:
+\begin{equation}
+\Lambda[n]=\sum_{i=0}^{N_d-1}\left(I[n-i]Q[n-i-N_T]-Q[n-i]I[n-i-N_T]\right).
+\end{equation}
+Decide bit 1 if $\Lambda[n]>0$, else 0. $N_d$ trades BER gain for complexity.
+
+\subsection{Algorithmic Pseudocode (Simulation Pipeline)}
+\begin{algorithm}[t]
+\caption{Burst GFSK Receiver Simulation Pipeline}
+\begin{algorithmic}[1]
+\State \textbf{Input:} frame params (preamble, sync, len, CRC), $h$, $BT$, $f_s$, SNR, CFO $v$, timing offset, $N_T$, $N_d$
+\State \textbf{Output:} BER, frame sync error $e_{\text{frame}}$, CFO error var$_f$, timing error var$_{\text{sync}}$
+\State \textbf{Preprocessing:} generate random payload; append CRC16; map to bipolar symbols; Gaussian filter and upsample by $f_s$; form $s[n]$
+\State \textbf{Channel:} apply delay, CFO $e^{j2\pi v nT_s}$, and AWGN to get $r[n]$
+\State \textbf{LPF:} filter $r[n]$ with FIR $\rightarrow z[n]$
+\State \textbf{Frame sync:} build $d[n]=z[n]z^{*}[n-N_x]$; correlate with diff-sync; adaptive threshold; find peak $\rightarrow$ sync index
+\State \textbf{CFO:} extract preamble segment; compute $c[n]=r[n]s_{\text{pre}}^{*}[n]$; apply L\&R to get $\hat{v}$; derotate $r_c[n]=r[n]e^{-j2\pi \hat{v} nT_s}$
+\State \textbf{Timing:} find phase peaks over multiple ``10'' periods in $r_c[n]$; average to get $\bar{\epsilon}$; set decision instants
+\State \textbf{Demod:} for each symbol, compute $\Lambda[n]$ with $N_d$ pairs; hard-decision bits; strip preamble/sync/len; CRC check
+\State \textbf{Metrics:} compare to ground truth; accumulate BER, var$_f$, var$_{\text{sync}}$, $e_{\text{frame}}$
+\end{algorithmic}
+\end{algorithm}
+
+\section{Performance Analysis}
+\subsection{CFO Estimation Error}
+For L\&R, the variance approximates \cite{Bian2003}
+\begin{equation}
+\mathrm{var}(\hat{v}) \approx \frac{6}{(N+1)(N-1)}\frac{1}{(2\pi T_s)^2}\frac{1}{\mathrm{SNR}},
+\end{equation}
+assuming small $v$ and high SNR; it approaches the CRB as $N$ grows.
+
+\subsection{Timing Error Impact}
+A timing error $\epsilon T_s$ reduces effective phase swing by factor $g(\epsilon)\approx\cos(\pi\epsilon/N_T)$ for smoothed CPFSK, yielding an SNR loss $G_{\epsilon}=g^2(\epsilon)$ in the differential detector.
+
+\subsection{BER of Differential GFSK with Combining}
+The decision statistic $\Lambda$ has mean $\pm \mu = \pm N_d \kappa h \pi$ (shape factor $\kappa$ from Gaussian filtering) and variance $\sigma^2 \approx 2N_d N_0 E_b/T_b$. The BER is
+\begin{equation}
+P_e \approx Q\!\left(\sqrt{\frac{2 E_b}{N_0} G_{\epsilon} \cos(\Delta\phi_{\text{res}}) N_d}\right),
+\end{equation}
+where $\Delta\phi_{\text{res}}$ denotes residual CFO phase per symbol. This shows $N_d$ yields $\approx10\log_{10} N_d$ dB gain when timing/CFO are well controlled.
+
+\section{MATLAB Simulations}
+Floating- and fixed-point simulations (1000 frames, $E_b/N_0$ 10--16 dB) follow Algorithm 1 using scripts in \texttt{GFSK\_MTLB\_float} and \texttt{GFSK\_MTLB\_fixed}. Metrics: frame error $e_{\text{frame}}$, CFO error var$_f$, timing error var$_{\text{sync}}$, BER. Results: frame sync succeeds above 12 dB; timing error $<1$ sample above 13 dB; multi-sample detection yields $\sim$1 dB gain; fixed-point loss $<2$ dB; BER reaches $4.7\times10^{-5}$ at 13 dB and $\approx0$ at 16 dB.
+
+\section{FPGA Architecture and Synthesis}
+The RTL (Vivado, 10 MHz) includes clock-gen for $f_s$, $f_x=4f_d$, $f_d=0.5$ MHz; buffers; frame sync; CFO (CORDIC for phase); timing recovery; multi-sample demod; CRC and control. Resource/timing (post-synthesis, indicative): meets 10 MHz with margin; throughput 500 kHz symbol rate; BRAM holds $f_s$/$f_x$ buffers and LUTs (preamble, diff sync, sine). Designs are in \texttt{GFSK\_FPGA\_4\_17.srcs}.
+
+\section{RTL Co-Simulation Results}
+MATLAB-generated stimuli feed Vivado testbench (1000 frames). At $E_b/N_0=14$ dB, BER is $2.99\times10^{-4}$; at 17 dB, $9.3\times10^{-6}$. Waveforms confirm correct frame detection, CFO convergence, timing adjustment, and CRC pass.
+
+\section{Conclusion}
+We presented a burst GFSK noncoherent receiver with differential correlation sync, L\&R CFO estimation, phase-peak timing recovery, and multi-sample differential demodulation. MATLAB and FPGA results show the design meets 500 kHz@10 MHz with target BER at 14/17 dB. Future work: further resource/power reduction, higher rates, and ASIC exploration.
+
+\begin{thebibliography}{1}
+    \bibitem{Yin2014}
+    Y. Yin, Y. Yan, C. Wei, and S. Yang, ``A Low-Power Low-Cost GFSK Demodulator With a Robust Frequency Offset Tolerance,'' \textit{IEEE Trans. Circuits Syst. II}, vol. 61, no. 9, pp. 696--700, 2014.
+    \bibitem{Lee2006}
+    T.-C. Lee and C.-C. Chen, ``A Mixed-Signal GFSK Demodulator for Bluetooth,'' \textit{IEEE Trans. Circuits Syst. II}, vol. 53, no. 3, pp. 197--201, 2006.
+    \bibitem{Bian2003}
+    D. Bian and X. Yi, ``An Improved Fitz Carrier Frequency Offset Estimation Algorithm,'' in \textit{Proc. ICCT}, 2003, pp. 778--783.
+    \bibitem{Villanti2007}
+    M. Villanti, P. Salmi, and G. E. Corazza, ``Differential Post Detection Integration Techniques for Robust Code Acquisition,'' \textit{IEEE Trans. Commun.}, vol. 55, no. 11, pp. 2172--2180, 2007.
+    \bibitem{Liu2016}
+    J. Liu and M. Cai, ``GFSK Modulation for BLE Baseband IC Design,'' in \textit{EDSSC}, 2016, pp. 299--302.
+    \bibitem{Lopez2020}
+    A. Lopez, ``Low-Latency GFSK Demodulation Architecture Comparison and Design for FPGA,'' \textit{IEEE Trans. Circuits Syst. II}, vol. 67, no. 9, pp. 567--572, 2020.
+    \bibitem{Yu2011}
+    B. Yu, L. Yang, and C.-C. Chong, ``Optimized Differential GFSK Demodulator,'' \textit{IEEE Trans. Commun.}, vol. 59, no. 6, pp. 1497--1501, 2011.
+    \bibitem{Wang2023}
+    G. Wang, J. Chen, Z. Bao, L. Chen, and T. Li, ``Synchronization and Differential Demodulation Algorithm of GMSK Signal,'' in \textit{Proc. ICECAI}, 2023, pp. 22--24.
+    \bibitem{Li1995}
+    B. Li, ``The Noncoherent Least Squares Phase Difference Sequence Estimator for Continuous Phase Modulation,'' \textit{IEEE Trans. Commun.}, vol. 43, no. 2/3/4, pp. 718--721, 1995.
+\end{thebibliography}
+
+\end{document}

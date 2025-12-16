@@ -1,0 +1,89 @@
+############################
+# General OS / editor junk #
+############################
+
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+###############
+# LaTeX build #
+###############
+
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.lof
+*.lot
+*.lol
+*.nav
+*.out
+*.snm
+*.synctex.gz
+*.toc
+*.vrb
+*.xdv
+*.run.xml
+
+###################
+# PDF / documents #
+###################
+
+# Generated PDFs (keep sources like .tex, .md, .docx)
+*.pdf
+!README*.pdf
+
+############
+# Vivado   #
+############
+
+# Vivado project / build outputs (keep HDL and source .xci/.vhd/.v files)
+*.jou
+*.str
+*.zip
+*.dcp
+*.rpt
+*.html
+*.xml
+*.wdb
+*.ltx
+*.pb
+*.log
+*.cache/
+*.hw/
+*.ip_user_files/
+*.sim/
+*.runs/
+*.srcs/sim_1/
+*.Xil/
+
+################
+# MATLAB / MEX #
+################
+
+*.asv
+*.mex*
+*.fig
+
+###############
+# Other data  #
+###############
+
+# Large generated data / intermediate results
+*.mat
+*.bin
+*.dat
+*.csv
+
+# Cursor / IDE helper folders (kept outside repo usually)
+.cursor/
+
+
