@@ -17,13 +17,12 @@ You can tweak N_d, eps, Delta_phi_res, N_T, and kappa to match your setup.
 import math
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.special import erfc
 
 
 def qfunc(x: np.ndarray) -> np.ndarray:
     """Q-function using erfc."""
-    return 0.5 * math.erfc(0) + 0.5 * np.nan_to_num(
-        np.erfc(x / math.sqrt(2.0))
-    )  # vectorized erfc
+    return 0.5 * erfc(x / np.sqrt(2.0))
 
 
 def ber_curve(
@@ -51,7 +50,7 @@ def ber_curve(
     eff_snr = 2.0 * ebn0_lin * g_eps * cfo_loss * n_d * kappa
     # Guard against negative due to cos() if delta_phi_res is large
     eff_snr = np.maximum(eff_snr, 0.0)
-    return 0.5 * np.erfc(np.sqrt(eff_snr / 2.0))
+    return 0.5 * erfc(np.sqrt(eff_snr / 2.0))
 
 
 def main():
