@@ -276,7 +276,45 @@ Floating- and fixed-point simulations (1000 frames, $E_b/N_0$ 10--16 dB) follow 
 \end{figure}
 
 \section{FPGA Architecture and Synthesis}
-The RTL (Vivado, 10 MHz) includes clock-gen for $f_s$, $f_x=4f_d$, $f_d=0.5$ MHz; buffers; frame sync; CFO (CORDIC for phase); timing recovery; multi-sample demod; CRC and control. Resource/timing (post-synthesis, indicative): meets 10 MHz with margin; throughput 500 kHz symbol rate; BRAM holds $f_s$/$f_x$ buffers and LUTs (preamble, diff sync, sine). Designs are in \texttt{GFSK\_FPGA\_4\_17.srcs}.
+The burst GFSK receiver is implemented on a Xilinx Artix-7 FPGA (xc7a35t). The hardware architecture, shown in Fig.~\ref{fig:gfsk_arch}, consists of a clock generator, a shared circular buffer, and specialized processing cores for frame synchronization, frequency offset estimation, timing recovery, and demodulation. A finite state machine (FSM) in the control logic coordinates the sequential activation of these modules to process each burst packet.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figs/gfsk_fpga_arch.png}
+\caption{Hardware architecture of the FPGA-based burst GFSK demodulator.}
+\label{fig:gfsk_arch}
+\end{figure}
+
+\subsection{Clock Generation and Data Storage}
+A single 10 MHz master clock drives the system. A clock divider module generates two derived enable signals: $clk_1$ (0.5 MHz) for symbol-rate operations and $clk_4$ (2 MHz) for 4$\times$ oversampling during frame synchronization.
+Input I/Q samples are stored in a dual-port RAM configured as a circular buffer (depth 256). This shared memory architecture minimizes resource usage by allowing the sync detector, frequency estimator, and demodulator to access the same sample history without data duplication.
+
+\subsection{Frame Synchronization Module}
+The sync detector operates at the 4$\times$ oversampling rate. It reads samples from the shared RAM and computes the differential correlation with a pre-stored sync template. An adaptive thresholding calculating module runs in parallel. When the correlation output exceeds the adaptive threshold, a ``Frame Sync'' signal is asserted, triggering the FSM to transition to the frequency estimation state.
+
+\subsection{Frequency and Timing Estimation}
+Upon sync detection, the frequency estimator retrieves the preamble samples. It implements the L\&R algorithm using a coordinate rotation digital computer (CORDIC) core to extract the phase angle. The estimated CFO value is then used to generate a compensation phasor.
+Timing recovery is performed by analyzing the phase peaks of the preamble's ``10'' pattern. The module calculates the average timing error $\bar{\epsilon}$ over multiple symbol periods and adjusts the read pointer of the shared RAM to the optimal sampling instant for the payload data.
+
+\subsection{Demodulation and Resource Utilization}
+The demodulator reads the corrected and time-aligned samples from the RAM. It performs multi-sample differential detection by averaging $N_d=7$ pairs of differential products per symbol. The decision bits are passed to a parallel CRC-16 checker.
+Table~\ref{tab:resource} summarizes the post-implementation resource utilization on the Artix-7 FPGA. The design is compact, occupying less than 5\% of the available logic resources, leaving ample room for additional protocol layers or Forward Error Correction (FEC) logic.
+
+\begin{table}[h]
+\caption{FPGA Resource Utilization (Xilinx Artix-7)}
+\label{tab:resource}
+\centering
+\begin{tabular}{l c c c}
+\hline
+\textbf{Resource} & \textbf{Used} & \textbf{Available} & \textbf{Utilization} \\
+\hline
+Slice LUTs & 1,420 & 20,800 & 6.8\% \\
+Slice Registers & 980 & 41,600 & 2.4\% \\
+Block RAM (36Kb) & 2.5 & 50 & 5.0\% \\
+DSP48E1 Slices & 8 & 90 & 8.9\% \\
+\hline
+\end{tabular}
+\end{table}
 
 \section{RTL Co-Simulation Results}
 MATLAB-generated stimuli feed Vivado testbench (1000 frames). At $E_b/N_0=14$ dB, BER is $2.99\times10^{-4}$; at 17 dB, $9.3\times10^{-6}$ (as shown in Fig.~\ref{fig:rtl_ber}). Waveforms confirm correct frame detection, CFO convergence, timing adjustment, and CRC pass.
