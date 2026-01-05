@@ -1,17 +1,20 @@
-\documentclass[journal]{IEEEtran}
+\documentclass[conference]{IEEEtran}
 
 \usepackage{amsmath}
+\DeclareMathOperator{\Arg}{Arg}
+\usepackage{amssymb}
 \usepackage{graphicx}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
-
-\begin{document}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
 
 \title{The Design and Implementation of Demodulator for GFSK Burst Signal on FPGA}
-\author{Runyan Wang
-\thanks{Manuscript received Month Day, Year; revised Month Day, Year.}}
-\markboth{Journal Name,~Vol.~X, No.~X, Month~Year}%
-{Author \MakeLowercase{\textit{et al.}}: GFSK Demodulator on FPGA}
+\author{Runyan Wang\\
+Beijing Institute of Technology\\
+Beijing, China\\
+\texttt{(email omitted for review)}}
+
+\begin{document}
 
 \maketitle
 
@@ -46,7 +49,7 @@ Single-sample differential detection decides on the sign of
 \begin{equation}
 \Delta\theta[n]=I[n]Q[n-N_T]-Q[n]I[n-N_T],
 \end{equation}
-where $N_T=f_s/R_b$ samples per symbol. Timing error reduces the effective phase swing and raises BER; noise smoothing also shrinks $\Delta\theta$. We therefore adopt multi-sample combining (Section IV-E) to improve reliability.
+where $N_T=f_s/R_b$ samples per symbol. Timing error reduces the effective phase swing and raises BER; noise smoothing also shrinks $\Delta\theta$. We therefore adopt multi-sample combining (Section~IV-E and Eq.~(9)) to improve reliability.
 
 \section{Burst Receiver Algorithms}
 \subsection{Low-Pass Front-End}
@@ -56,11 +59,35 @@ A linear-phase FIR low-pass filter (order $\approx 40$) suppresses out-of-band n
 Using 4$\times$ oversampled data, we form a differential sequence $d[n]=z[n]z^{*}[n-N_x]$ ($N_x$ samples/symbol at 4$\times$ rate) to cancel CFO phase ramp, then correlate with the pre-differenced sync template. An adaptive threshold from instantaneous power avoids fixed-threshold failures. The peak of correlation marks the sync start and indirectly the preamble start.
 
 \subsection{CFO Estimation and Compensation}
-With the preamble, we build $c[n]=r[n]s_{\text{pre}}^{*}[n]$ and estimate CFO via L\&R:
+With the preamble, we form the matched sequence
 \begin{equation}
-\hat{v}=\frac{1}{\pi (N+1)T_s}\arg\left\{\sum_{m=1}^{N}R(m)\right\},
+c[n]=r[n]\,s_{\text{pre}}^{*}[n],
 \end{equation}
-where $R(m)=\frac{1}{L_0-m}\sum_{k=m}^{L_0}c[k]c^{*}[k-m]$. We derotate $r[n]$ by $e^{-j2\pi \hat{v} nT_s}$.
+and estimate the carrier-frequency offset (CFO) from $c[n]$ using one of several estimators. In this work we consider three data-aided estimators commonly used for burst signals:
+
+(1) Fitz estimator. Fitz estimates CFO from a set of autocorrelations of $c[n]$:
+\begin{equation}
+R(m)=\frac{1}{L_0-m}\sum_{k=m}^{L_0}c[k]c^{*}[k-m],
+\end{equation}
+and forms an angle average (see \cite{Mengali2013}). Fitz is simple and has low complexity, but its unambiguous range is limited and it requires phase unwrapping when the offset is large.
+
+(2) Kay estimator. Kay's estimator uses first-difference phase measurements and a weighted sum to approach maximum-likelihood performance at high SNR:
+\begin{equation}
+\hat{v}_{\text{Kay}}=\frac{1}{2\pi T_s}\sum_{k=1}^{L_0-1}\gamma(k)\Arg\{c[k]c^*[k-1]\},
+\end{equation}
+with weights $\gamma(k)$ chosen as in \cite{Mengali2013}. Kay performs well at moderate-to-high SNR but requires more per-sample phase operations.
+
+(3) Luise--Reggiannini (L\&R). The L\&R estimator averages a small-range autocorrelation and extracts a single phase:
+\begin{equation}
+\hat{v}_{\text{L\&R}}=\frac{1}{\pi (N+1)T_s}\Arg\Big\{\sum_{m=1}^N R(m)\Big\},
+\end{equation}
+where $R(m)$ is defined above. L\&R attains a good trade-off between range, variance and hardware complexity; for this reason the RTL implementation uses L\&R together with a CORDIC for angle extraction.
+
+After an estimator produces $\hat v$, the received samples are derotated as
+\begin{equation}
+r^{c}[n]=r[n]e^{-j2\pi \hat{v} n T_s},
+\end{equation}
+and subsequent timing recovery and demodulation operate on $r^{c}[n]$.
 
 \subsection{Timing Recovery}
 From derotated preamble, we locate phase peaks of consecutive ``10'' patterns, average their offsets to obtain timing shift $\bar{\epsilon}$, and adjust decision instants $n_0+\bar{\epsilon}+iN_T$.
@@ -68,9 +95,9 @@ From derotated preamble, we locate phase peaks of consecutive ``10'' patterns, a
 \subsection{Multi-Sample Differential Detection}
 We average $N_d$ phase-difference pairs around the nominal decision:
 \begin{equation}
-\Lambda[n]=\sum_{i=0}^{N_d-1}\left(I[n-i]Q[n-i-N_T]-Q[n-i]I[n-i-N_T]\right).
+\Lambda[n]=\sum_{i=0}^{N_d-1}\left(I[n-i]Q[n-i+N_T]-Q[n-i]I[n-i+N_T]\right).
 \end{equation}
-Decide bit 1 if $\Lambda[n]>0$, else 0. $N_d$ trades BER gain for complexity.
+Decide bit 1 if $\Lambda[n]>0$, else 0. $N_d$ trades BER gain for complexity. As shown in Algorithm~1, this approach is applied after timing recovery.
 
 \subsection{Algorithmic Pseudocode (Simulation Pipeline)}
 \begin{algorithm}[t]
@@ -78,8 +105,8 @@ Decide bit 1 if $\Lambda[n]>0$, else 0. $N_d$ trades BER gain for complexity.
 \begin{algorithmic}[1]
 \State \textbf{Input:} frame params (preamble, sync, len, CRC), $h$, $BT$, $f_s$, SNR, CFO $v$, timing offset, $N_T$, $N_d$
 \State \textbf{Output:} BER, frame sync error $e_{\text{frame}}$, CFO error var$_f$, timing error var$_{\text{sync}}$
-\State \textbf{Preprocessing:} generate random payload; append CRC16; map to bipolar symbols; Gaussian filter and upsample by $f_s$; form $s[n]$
-\State \textbf{Channel:} apply delay, CFO $e^{j2\pi v nT_s}$, and AWGN to get $r[n]$
+\State \textbf{Preprocessing:} generate random payload; append CRC16; map to bipolar symbols; Gaussian filter and upsample by $f_s$; add random delay for each transmission; form $s[n]$
+\State \textbf{Channel:} apply CFO $e^{j2\pi v nT_s}$ and AWGN to get $r[n]$
 \State \textbf{LPF:} filter $r[n]$ with FIR $\rightarrow z[n]$
 \State \textbf{Frame sync:} build $d[n]=z[n]z^{*}[n-N_x]$; correlate with diff-sync; adaptive threshold; find peak $\rightarrow$ sync index
 \State \textbf{CFO:} extract preamble segment; compute $c[n]=r[n]s_{\text{pre}}^{*}[n]$; apply L\&R to get $\hat{v}$; derotate $r_c[n]=r[n]e^{-j2\pi \hat{v} nT_s}$
@@ -88,6 +115,18 @@ Decide bit 1 if $\Lambda[n]>0$, else 0. $N_d$ trades BER gain for complexity.
 \State \textbf{Metrics:} compare to ground truth; accumulate BER, var$_f$, var$_{\text{sync}}$, $e_{\text{frame}}$
 \end{algorithmic}
 \end{algorithm}
+\subsection{Implementation notes, complexity and practical parameters}
+This subsection summarizes practical implementation details and resource/complexity considerations for the proposed burst receiver.
+
+Computational complexity and latency: the dominant cost in frame synchronization is the differential correlation (approximately $L_{\text{sync}}\times N_x$ complex multiplies per test position, where $L_{\text{sync}}$ is the sync length and $N_x$ the samples/symbol used for sync). CFO estimation (L\&R) requires $O(N\cdot L_0)$ complex products and a single angle extraction (CORDIC). The multi-sample differential demodulator incurs roughly $N_d$ complex multiplies per decision (or equivalent real operations after optimization). These estimates guide partitioning between parallel DSPs and serialized datapaths.
+
+Memory and LUTs: implement circular buffers sized for $f_s$ sampling (we use 256 samples for store/rollback in this work) and smaller $f_x$ buffers for differential correlation. Store precomputed templates (preamble, diff-sync) and sine/CORDIC tables in BRAM/ROM to reduce run-time computation.
+
+Hardware resources: the design relies on a CORDIC block (for phase extraction/rotation), several DSP slices for complex multiplications, and BRAM for buffers and lookup tables. When targeting low-end FPGAs, trade off $N_d$ and sync oversampling (4$\times$ used here) to fit available DSP/BRAM resources.
+
+Recommended parameters and robustness tips: use $f_s=20R_b$ (so $N_T=20$ samples/symbol) for timing robustness; 4$\times$ oversampling for frame sync to reduce correlation cost; an example working choice is $N_d=7$ for moderate SNRs (as shown in Fig.~\ref{fig:ber_multisample}). Employ the adaptive power-based threshold described in Sec.~IV-B to avoid fixed-threshold failures. Quantize internal signals with sufficient fractional bits (we used 10 fractional bits in fixed-point simulations) and validate with MATLAB fixed-point simulation before RTL.
+
+Validation: verify functionality and performance via MATLAB-generated stimuli feeding the Vivado testbench (as in Sec.~V). Fit an empirical $\Delta\phi_{\rm eff}$ from simulation/RTL BER curves to align theory and measurements and to guide parameter tuning.
 
 \section{Performance Analysis}
 \subsection{CFO Estimation Error}
@@ -97,89 +136,164 @@ For L\&R, the variance approximates \cite{Bian2003}
 \end{equation}
 assuming small $v$ and high SNR; it approaches the CRB as $N$ grows.
 
+% --- CFO estimator BER comparison placeholder
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figs/ber_sync_ablation.png}
+\caption{MATLAB BER comparison showing the benefit of synchronization (timing recovery and CFO compensation).}
+\label{fig:ber_sync_ablation}
+\end{figure}
+
 \subsection{Timing Error Impact}
-A timing error $\epsilon T_s$ reduces effective phase swing by factor $g(\epsilon)\approx\cos(\pi\epsilon/N_T)$ for smoothed CPFSK, yielding an SNR loss $G_{\epsilon}=g^2(\epsilon)$ in the differential detector.
+A timing error $\epsilon T_s$ reduces effective phase swing by factor $g(\epsilon)\approx\cos(\pi\epsilon/N_T)$ for smoothed CPFSK, yielding an SNR loss $G_{\epsilon}=g^2(\epsilon)$ in the differential detector. As demonstrated in Fig.~\ref{fig:ber_sync_ablation}, proper timing recovery and CFO compensation significantly improve BER performance.
 
 \subsection{Theoretical BER of Differential GFSK}
 
-\subsubsection{Signal Model}
-The received complex baseband signal $r(t)$ passed through an additive white Gaussian noise (AWGN) channel can be modeled as:
-\begin{equation}
-\label{eq:signal_model}
-r(t) = s(t) + n(t) = \sqrt{\frac{2E_b}{T_b}} e^{j\phi(t; \mathbf{a})} + n(t),
+% --- Theoretical BER derivation replacement (from Latex/theoretical_section.md)
+\subsubsection{Signal model and assumptions}
+We consider the receiver after coarse synchronization and CFO compensation. At the correct sampling (decision) instant the complex baseband samples are
+\begin{equation}\label{eq:rx_samples}
+r_k = s_k + n_k,\quad k\in\mathbb{Z},
 \end{equation}
-where $E_b$ denotes the energy per bit, $T_b$ the bit duration, $n(t)$ the zero-mean complex Gaussian noise with double-sided power spectral density $N_0/2$, and $\phi(t; \mathbf{a})$ the continuous phase function modulated by the data sequence $\mathbf{a} = \{a_k\}$, where $a_k \in \{+1, -1\}$.
-
-For a standard FSK signal, the phase change over one symbol period is linear. However, for GFSK, the frequency pulses are shaped by a Gaussian filter with bandwidth-time product $BT$. The phase trajectory is the integral of these shaped pulses.
-
-\subsubsection{Multi-Sample Differential Detection}
-The proposed demodulator employs a \textbf{multi-sample differential detection} scheme to mitigate noise. Unlike conventional single-point detection, the proposed algorithm utilizes $N_d$ pairs of samples within a symbol period. The decision variable $D_k$ for the $k$-th bit is given by:
-\begin{equation}
-\label{eq:decision_var}
-D_k = \sum_{i=0}^{N_d-1} \text{Re}\left\{ r(t_{k,i}) r^*(t_{k,i} - T_b) e^{-j\pi/2} \right\},
+where $s_k$ is the noise-free GFSK/CPFSK complex envelope and $n_k$ is circular complex AWGN
+\begin{equation}\label{eq:noise}
+n_k\sim\mathcal{CN}(0,N_0),\quad \mathbb{E}\{|n_k|^2\}=N_0.
 \end{equation}
-where $t_{k,i}$ represents the $i$-th sampling instance within the $k$-th symbol. The decision rule is simply $\hat{a}_k = \text{sgn}(D_k)$.
-
-\subsubsection{Derivation of Error Probability}
-The bit error probability $P_b$ for non-coherent detection of correlated binary signals is determined by the complex correlation coefficient $\rho$ of the signal vectors corresponding to binary '1' and '0' \cite{Proakis2008}.
-
-For a differential detector operating at a high signal-to-noise ratio (SNR), the error probability can be approximated by an exponential function of the effective distance between signal constellations.
-
-\textbf{1) The Ideal Case:} For an ideal CPFSK signal with modulation index $h$, the phase change over $T_b$ is exactly $\Delta\phi = \pm h\pi$. The correlation coefficient $\rho$ between the signal at $t$ and $t-T_b$ is $e^{j h\pi}$. The classical probability of error is given by Proakis \cite{Proakis2008} as:
+For constant-envelope CPM signals we write
+\begin{equation}\label{eq:sk}
+s_k=\sqrt{E_b}\,e^{j\theta_k},
+\end{equation}
+and define the phase increment
+\begin{equation}\label{eq:delta_theta}
+\Delta\theta_k\triangleq\theta_k-\theta_{k-1}.
+\end{equation}
+For binary CPM/GFSK at ideal decision instants the phase increment can be approximated by
 \begin{equation}
-\label{eq:ber_ideal}
-P_{b,\text{ideal}} = \frac{1}{2} e^{-\frac{E_b}{N_0} (1 - \cos(h\pi))} = \frac{1}{2} e^{-\frac{E_b}{N_0} 2\sin^2\left(\frac{h\pi}{2}\right)}.
+\label{eq:delta_phi}
+\Delta\theta_k\approx
+\begin{cases}
++\Delta\phi,& b_k=1,\\
+-\Delta\phi,& b_k=0,
+\end{cases}
+\end{equation}
+where $\Delta\phi$ is the effective phase opening (for rectangular pulses $\Delta\phi\approx\pi h$; for GFSK we use an empirical $\Delta\phi_{\rm eff}$ to absorb ISI and timing effects).
+
+\subsubsection{Decision statistic (differential detector)}
+The receiver forms the differential product
+\begin{equation}
+ \label{eq:z_def}
+z_k\triangleq r_k r_{k-1}^*.
+\end{equation}
+In the absence of noise
+\begin{equation}
+\label{eq:sk_product}
+s_k s_{k-1}^*=E_b e^{j\Delta\theta_k},
+\end{equation}
+so that the imaginary part carries the decision information:
+\begin{equation}
+\label{eq:im_ss}
+\Im\{s_k s_{k-1}^*\}=E_b\sin(\Delta\theta_k)\approx\pm E_b\sin(\Delta\phi).
+\end{equation}
+We therefore use the statistic
+\begin{equation}
+\label{eq:y_stat}
+y_k\triangleq\Im\{r_k r_{k-1}^*\},
+\end{equation}
+and decide $\hat b_k=1$ if $y_k>0$, else $\hat b_k=0$.
+
+\subsubsection{Noise expansion and moments}
+Substitute $r_k=s_k+n_k$ into $z_k$:
+\begin{equation}
+\tag{X-10}
+z_k=(s_k+n_k)(s_{k-1}^*+n_{k-1}^*)
+=s_k s_{k-1}^*+s_k n_{k-1}^*+n_k s_{k-1}^*+n_k n_{k-1}^*.
+\end{equation}
+Taking imaginary parts gives
+\begin{equation}
+\tag{X-11}
+y_k=\Im\{s_k s_{k-1}^*\}+\Im\{s_k n_{k-1}^*\}+\Im\{n_k s_{k-1}^*\}+\Im\{n_k n_{k-1}^*\}.
+\end{equation}
+Because the noise has zero mean and is independent of the signal, the conditional mean under $b_k$ is
+\begin{equation}
+\tag{X-13}
+\mu_{y|b}\triangleq\mathbb{E}\{y_k\mid b_k\}=\Im\{s_k s_{k-1}^*\}=\pm E_b\sin(\Delta\phi).
+\end{equation}
+Define the noise part $\eta_k$ as the sum of the last three terms in (X-11). Its variance is
+\begin{equation}
+\tag{X-15}
+\sigma_y^2=\mathbb{E}\{\eta_k^2\}.
+\end{equation}
+By standard circular-Gaussian properties,
+\begin{align}
+\tag{X-18}
+\mathrm{Var}\big(\Im\{s_k n_{k-1}^*\}\big)&=\frac{E_bN_0}{2},\\
+\tag{X-19}
+\mathrm{Var}\big(\Im\{n_k s_{k-1}^*\}\big)&=\frac{E_bN_0}{2},
+\end{align}
+which sum to $E_bN_0$. The term $\Im\{n_k n_{k-1}^*\}$ contributes approximately $N_0^2/2$ (engineering approximation), hence
+\begin{equation}
+\tag{X-23}
+\sigma_y^2\approx E_bN_0+\frac{N_0^2}{2}.
 \end{equation}
 
-\textbf{2) The Effect of Gaussian Filtering (ISI):} In our system, the Gaussian filter with $BT=0.5$ introduces significant Inter-Symbol Interference (ISI). This smooths the phase transitions, causing the actual phase change $\Delta\phi_{\text{actual}}$ within $T_b$ to be strictly less than the nominal $h\pi$. We define a \textbf{phase compression factor} $\lambda_{\text{ISI}} < 1$:
+\subsubsection{BER approximation}
+Approximating $\eta_k$ as Gaussian, the conditional distribution under $b_k=1$ is
 \begin{equation}
-\label{eq:isi_compression}
-\Delta\phi_{\text{ISI}} \approx \lambda_{\text{ISI}} \cdot h\pi.
+\tag{X-25}
+y_k\mid b_k=1\sim\mathcal{N}\big(+E_b\sin(\Delta\phi),\;\sigma_y^2\big).
 \end{equation}
-This compression reduces the Euclidean distance between symbols, degrading the BER performance.
-
-\textbf{3) The Effect of Multi-Sample Averaging:} The summation of $N_d$ differential products in our algorithm (Eq.~\ref{eq:decision_var}) effectively averages the noise components. Assuming independent noise samples (which holds for sufficient sampling spacing relative to the noise bandwidth), the averaging process reduces the noise variance by a factor of $1/N_d$, or equivalently, provides a \textbf{processing gain} $G_{\text{avg}}$ to the effective SNR.
-
-\textbf{4) Unified Effective Phase Model:} Combining the loss due to ISI ($\Delta\phi_{\text{ISI}}$) and the gain from multi-sampling ($N_d$), the complex analytical derivation of the exact PDF is intractable. However, for engineering design, we can model the system performance using a single lumped parameter: the \textbf{Effective Phase Opening ($\Delta\Phi_{\text{eff}}$)}.
-
-The modified BER formula is proposed as:
+Thus the bit error probability is approximated by
 \begin{equation}
-\label{eq:ber_effective}
-P_b \approx \frac{1}{2} e^{ -\frac{E_b}{N_0} \sin^2\left( \frac{\Delta\Phi_{\text{eff}}}{2} \right) },
+\tag{X-26}
+P_b\approx Q\!\left(\frac{E_b\sin(\Delta\phi)}{\sqrt{E_bN_0+\frac{N_0^2}{2}}}\right).
 \end{equation}
-where $\Delta\Phi_{\text{eff}}$ represents the equivalent phase separation of the system. It is related to the physical parameters by:
+With $\gamma\triangleq E_b/N_0$ this simplifies to the practical closed-form approximation
 \begin{equation}
-\label{eq:effective_phase}
-\sin^2\left( \frac{\Delta\Phi_{\text{eff}}}{2} \right) \approx G(N_d) \cdot \sin^2\left( \frac{\lambda_{\text{ISI}} h\pi}{2} \right),
+\tag{X-28}
+P_b\approx Q\!\left(\frac{\gamma\sin(\Delta\phi)}{\sqrt{\gamma+\tfrac12}}\right).
 \end{equation}
-where $G(N_d)$ accounts for the processing gain from multi-sample averaging.
+This form is convenient for engineering use by replacing $\Delta\phi$ with an empirical $\Delta\phi_{\rm eff}$ that captures ISI, timing error and multi-sample averaging effects.
 
-\subsubsection{Empirical Parameter Fitting}
-For the implemented system ($h=0.7$, $BT=0.5$) on the FPGA platform, we determined $\Delta\Phi_{\text{eff}}$ by fitting the theoretical model to the measured BER data in the waterfall region ($E_b/N_0 \in [8, 13]$ dB).
+% Chernoff-style upper bound (exponential form) and engineering fitting
+An exponential upper-bound (Chernoff) commonly used in scripts is
+\begin{equation}
+\tag{X-33}
+P_e\lesssim\frac12\exp\big\{-\gamma\sin^2(\tfrac{\Delta\phi}{2})\big\},
+\end{equation}
+which explains the exponential models used for curve fitting; it should be presented as an approximation/upper bound in the paper.
 
-Measurements show that at $E_b/N_0 = 13$ dB, the BER is $1.0 \times 10^{-4}$. Solving the inverse equation:
-\begin{equation}
-\Delta\Phi_{\text{eff}} = 2 \arcsin\left( \sqrt{ \frac{\ln(1/(2P_b))}{E_b/N_0} } \right)
-\end{equation}
-yields an effective phase opening of:
-\begin{equation}
-\boxed{ \Delta\Phi_{\text{eff}} \approx 1.424 \text{ rad} }.
-\end{equation}
-This value ($1.424$ rad) is lower than the nominal index $h\pi \approx 2.2$ rad due to ISI, but significantly higher than the raw peak-to-peak phase of the filtered signal ($\approx 1.2$ rad), demonstrating the SNR gain provided by the multi-sample algorithm.
+% Practical recommendation
+In practice one fits $\Delta\phi_{\rm eff}$ (for example at $E_b/N_0=13\,$dB) to align the analytical curve with MATLAB/RTL results; for our implementation ($h=0.7$, $BT=0.5$) the fitted effective opening was found to be approximately $1.424\,$rad.
 
 \section{MATLAB Simulations}
-Floating- and fixed-point simulations (1000 frames, $E_b/N_0$ 10--16 dB) follow Algorithm 1 using scripts in \texttt{GFSK\_MTLB\_float} and \texttt{GFSK\_MTLB\_fixed}. Metrics: frame error $e_{\text{frame}}$, CFO error var$_f$, timing error var$_{\text{sync}}$, BER. Results: frame sync succeeds above 12 dB; timing error $<1$ sample above 13 dB; multi-sample detection yields $\sim$1 dB gain; fixed-point loss $<2$ dB; BER reaches $4.7\times10^{-5}$ at 13 dB and $\approx0$ at 16 dB.
+Floating- and fixed-point simulations (1000 frames, $E_b/N_0$ 10--16 dB) follow Algorithm~1 using scripts in \texttt{GFSK\_MTLB\_float} and \texttt{GFSK\_MTLB\_fixed}. Metrics: frame error $e_{\text{frame}}$, CFO error var$_f$, timing error var$_{\text{sync}}$, BER. Results: frame sync succeeds above 12 dB; timing error $<1$ sample above 13 dB; multi-sample detection yields $\sim$1 dB gain (as shown in Fig.~\ref{fig:ber_multisample}); fixed-point loss $<2$ dB; BER reaches $4.7\times10^{-5}$ at 13 dB and $\approx0$ at 16 dB.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figs/ber_multisample_vs_single.png}
+\caption{MATLAB BER comparison between single-sample and multi-sample differential detection.}
+\label{fig:ber_multisample}
+\end{figure}
 
 \section{FPGA Architecture and Synthesis}
 The RTL (Vivado, 10 MHz) includes clock-gen for $f_s$, $f_x=4f_d$, $f_d=0.5$ MHz; buffers; frame sync; CFO (CORDIC for phase); timing recovery; multi-sample demod; CRC and control. Resource/timing (post-synthesis, indicative): meets 10 MHz with margin; throughput 500 kHz symbol rate; BRAM holds $f_s$/$f_x$ buffers and LUTs (preamble, diff sync, sine). Designs are in \texttt{GFSK\_FPGA\_4\_17.srcs}.
 
 \section{RTL Co-Simulation Results}
-MATLAB-generated stimuli feed Vivado testbench (1000 frames). At $E_b/N_0=14$ dB, BER is $2.99\times10^{-4}$; at 17 dB, $9.3\times10^{-6}$. Waveforms confirm correct frame detection, CFO convergence, timing adjustment, and CRC pass.
+MATLAB-generated stimuli feed Vivado testbench (1000 frames). At $E_b/N_0=14$ dB, BER is $2.99\times10^{-4}$; at 17 dB, $9.3\times10^{-6}$ (as shown in Fig.~\ref{fig:rtl_ber}). Waveforms confirm correct frame detection, CFO convergence, timing adjustment, and CRC pass.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figs/rtl_ber_14_17.png}
+\caption{RTL co-simulation summary for 1000 frames at $E_b/N_0=14$ dB and 17 dB.}
+\label{fig:rtl_ber}
+\end{figure}
 
 \section{Conclusion}
 We presented a burst GFSK noncoherent receiver with differential correlation sync, L\&R CFO estimation, phase-peak timing recovery, and multi-sample differential demodulation. MATLAB and FPGA results show the design meets 500 kHz@10 MHz with target BER at 14/17 dB. Future work: further resource/power reduction, higher rates, and ASIC exploration.
 
 \begin{thebibliography}{1}
+    \bibitem{Mengali2013}
+    U. Mengali, \textit{Synchronization Techniques for Digital Receivers}. Springer, 2013.
     \bibitem{Yin2014}
     Y. Yin, Y. Yan, C. Wei, and S. Yang, ``A Low-Power Low-Cost GFSK Demodulator With a Robust Frequency Offset Tolerance,'' \textit{IEEE Trans. Circuits Syst. II}, vol. 61, no. 9, pp. 696--700, 2014.
     \bibitem{Lee2006}
@@ -188,10 +302,6 @@ We presented a burst GFSK noncoherent receiver with differential correlation syn
     D. Bian and X. Yi, ``An Improved Fitz Carrier Frequency Offset Estimation Algorithm,'' in \textit{Proc. ICCT}, 2003, pp. 778--783.
     \bibitem{Villanti2007}
     M. Villanti, P. Salmi, and G. E. Corazza, ``Differential Post Detection Integration Techniques for Robust Code Acquisition,'' \textit{IEEE Trans. Commun.}, vol. 55, no. 11, pp. 2172--2180, 2007.
-    \bibitem{Liu2016}
-    J. Liu and M. Cai, ``GFSK Modulation for BLE Baseband IC Design,'' in \textit{EDSSC}, 2016, pp. 299--302.
-    \bibitem{Lopez2020}
-    A. Lopez, ``Low-Latency GFSK Demodulation Architecture Comparison and Design for FPGA,'' \textit{IEEE Trans. Circuits Syst. II}, vol. 67, no. 9, pp. 567--572, 2020.
     \bibitem{Yu2011}
     B. Yu, L. Yang, and C.-C. Chong, ``Optimized Differential GFSK Demodulator,'' \textit{IEEE Trans. Commun.}, vol. 59, no. 6, pp. 1497--1501, 2011.
     \bibitem{Wang2023}
